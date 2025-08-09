@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Andrea</title>
+<style>
+  body {
+    background: #ffe6f0;
+    font-family: 'Comic Sans MS', cursive, sans-serif;
+    text-align: center;
+    padding: 30px;
+    color: #d63384;
+  }
+  h1 {
+    font-size: 3rem;
+    margin-bottom: 0;
+  }
+  .lead {
+    font-size: 1.5rem;
+    margin-bottom: 20px;
+  }
+  .controls, .instruments {
+    margin: 15px 0;
+  }
+  button {
+    background: #ff80b3;
+    border: none;
+    color: white;
+    padding: 12px 24px;
+    font-size: 1.2rem;
+    margin: 5px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.3s;
+  }
+  button:hover {
+    background: #ff4d94;
+  }
+  button:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+  }
+  .status {
+    margin-top: 10px;
+    font-size: 1rem;
+    color: #555;
+  }
+  canvas {
+    background: #fff;
+    margin-top: 10px;
+    border-radius: 5px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Andrea</h1>
+<p class="lead">Tiamo &lt;3</p>
+
+<div class="controls">
+  <button id="playAll">▶️ Play</button>
+  <button id="stopAll">⏹️ Stop</button>
+  <button id="testTone">🔔 Test sonido</button>
+</div>
+
+<div class="instruments">
+  <button id="pianoBtn" disabled>🎹 Piano <span id="pianoHint">(cargando...)</span></button>
+  <button id="musicBoxBtn" disabled>🎼 Music Box <span id="musicBoxHint">(cargando...)</span></button>
+  <button id="guitarBtn" disabled>🎸 Guitarra <span id="guitarHint">(cargando...)</span></button>
+</div>
+
+<div class="status" id="status">Estado: Esperando interacción</div>
+<canvas id="meterCanvas" width="360" height="32"></canvas>
+
+<script>
+// URLs directas de GitHub (raw)
+const baseRaw = 'https://raw.githubusercontent.com/dardoflowmusic-art/Andrea/main/';
+const audioFiles = {
+  piano: baseRaw + 'piano.ogg',
+  musicBox: baseRaw + 'musicbox.ogg',
+  guitar: baseRaw + 'guitarra.ogg'
+};
+
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+const gainNodes = {};
+const audioBuffers = {};
+const playingSources = {};
+
+async function loadAudio(name, url) {
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`No se pudo cargar: ${url}`);
+    const arrayBuffer = await resp.arrayBuffer();
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    audioBuffers[name] = audioBuffer;
+    document.getElementById(name + 'Btn').disabled = false;
+    document.getElementById(name + 'Hint').textContent = '';
+  } catch (e) {
+    document.getElementById(name + 'Hint').textContent = '(no encontrado)';
+    console.error(`Error cargando ${name}:`, e);
+  }
+}
+
+function playInstrument(name) {
+  if (!audioBuffers[name]) return;
+  const source = audioCtx.createBufferSource();
+  source.buffer = audioBuffers[name];
+  source.loop = true;
+  const gainNode = audioCtx.createGain();
+  gainNode.gain.value = 0;
+  source.connect(gainNode).connect(audioCtx.destination);
+  source.start();
+  gainNodes[name] = gainNode;
+  playingSources[name] = source;
+  fadeVolume(gainNode, 1, 0.3);
+}
+
+function stopInstrument(name) {
+  if (gainNodes[name]) {
+    fadeVolume(gainNodes[name], 0, 0.3, () => {
+      if (playingSources[name]) {
+        playingSources[name].stop();
+        delete playingSources[name];
+      }
+    });
+  }
+}
+
+function fadeVolume(gainNode, target, duration, callback) {
+  const now = audioCtx.currentTime;
+  gainNode.gain.cancelScheduledValues(now);
+  gainNode.gain.linearRampToValueAtTime(target, now + duration);
+  if (callback) setTimeout(callback, duration * 1000);
+}
+
+function playAll() {
+  Object.keys(audioBuffers).forEach(name => {
+    if (!playingSources[name]) playInstrument(name);
+  });
+  document.getElementById('status').textContent = 'Estado: Reproduciendo todo';
+}
+
+function stopAll() {
+  Object.keys(playingSources).forEach(name => stopInstrument(name));
+  document.getElementById('status').textContent = 'Estado: Detenido';
+}
+
+function testTone() {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  gain.gain.value = 0.1;
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.type = 'sine';
+  osc.frequency.value = 440;
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.5);
+}
+
+function setupButtons() {
+  document.getElementById('playAll').addEventListener('click', async () => {
+    await audioCtx.resume();
+    playAll();
+  });
+  document.getElementById('stopAll').addEventListener('click', stopAll);
+  document.getElementById('testTone').addEventListener('click', testTone);
+
+  ['piano', 'musicBox', 'guitar'].forEach(name => {
+    const btn = document.getElementById(name + 'Btn');
+    btn.addEventListener('click', async () => {
+      await audioCtx.resume();
+      if (playingSources[name]) {
+        stopInstrument(name);
+        document.getElementById('status').textContent = `Estado: ${name} apagado`;
+      } else {
+        playInstrument(name);
+        document.getElementById('status').textContent = `Estado: ${name} encendido`;
+      }
+    });
+  });
+}
+
+// Medidor simple de volumen (dBFS aprox)
+function setupMeter() {
+  const analyser = audioCtx.createAnalyser();
+  const gain = audioCtx.createGain();
+  gain.gain.value = 1;
+  gain.connect(audioCtx.destination);
+  analyser.fftSize = 256;
+
+  // Conectar todos a este medidor
+  const connectMeter = (node) => node.connect(gain).connect(analyser);
+
+  // Redefinir playInstrument para que pase por el medidor
+  const oldPlayInstrument = playInstrument;
+  playInstrument = function(name) {
+    if (!audioBuffers[name]) return;
+    const source = audioCtx.createBufferSource();
+    source.buffer = audioBuffers[name];
+    source.loop = true;
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = 0;
+    source.connect(gainNode);
+    connectMeter(gainNode);
+    source.start();
+    gainNodes[name] = gainNode;
+    playingSources[name] = source;
+    fadeVolume(gainNode, 1, 0.3);
+  };
+
+  const canvas = document.getElementById('meterCanvas');
+  const ctx = canvas.getContext('2d');
+  const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+  function draw() {
+    requestAnimationFrame(draw);
+    analyser.getByteFrequencyData(dataArray);
+    const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = avg > 10 ? '#ff4d94' : '#ccc';
+    ctx.fillRect(0, 0, (avg / 255) * canvas.width, canvas.height);
+  }
+  draw();
+}
+
+(async function init() {
+  await Promise.all([
+    loadAudio('piano', audioFiles.piano),
+    loadAudio('musicBox', audioFiles.musicBox),
+    loadAudio('guitar', audioFiles.guitar)
+  ]);
+  setupButtons();
+  setupMeter();
+})();
+</script>
+</body>
+</html>
